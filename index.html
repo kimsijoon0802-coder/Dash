@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Neon Dash</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <style>
         body {
             margin: 0;
@@ -29,6 +30,8 @@
     "lucide-react": "https://aistudiocdn.com/lucide-react@^0.554.0",
     "react": "https://aistudiocdn.com/react@^19.2.0",
     "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "react-dom/client": "https://aistudiocdn.com/react-dom@^19.2.0/client",
+    "react-dom": "https://aistudiocdn.com/react-dom@^19.2.0",
     "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/"
   }
 }
@@ -36,5 +39,900 @@
 </head>
 <body>
     <div id="root"></div>
+
+    <script type="text/babel" data-type="module">
+        import React, { useEffect, useRef, useState, useCallback } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { Play, RotateCcw, CheckCircle, ChevronRight, ChevronLeft, Lock } from 'lucide-react';
+
+        // --- CONSTANTS & TYPES (Merged) ---
+        
+        const GameState = {
+          MENU: 'MENU',
+          PLAYING: 'PLAYING',
+          GAME_OVER: 'GAME_OVER',
+          LEVEL_COMPLETE: 'LEVEL_COMPLETE',
+        };
+
+        const ObstacleType = {
+          SPIKE: 'SPIKE',
+          BLOCK: 'BLOCK',
+          PLATFORM: 'PLATFORM',
+          SAW: 'SAW',
+          JUMP_PAD: 'JUMP_PAD',
+          JUMP_ORB: 'JUMP_ORB'
+        };
+
+        const PLAYER_SIZE = 40;
+        const FLOOR_HEIGHT = 100;
+        const LEVEL_LENGTH = 50000; // Total distance for 100%
+
+        const COLORS = {
+          PLAYER: '#06b6d4', // Cyan-500
+          PLAYER_BORDER: '#ecfeff', // Cyan-50
+          SPIKE: '#ef4444', // Red-500
+          SAW: '#f87171', // Red-400
+          SAW_CENTER: '#7f1d1d', // Red-900
+          BLOCK: '#3b82f6', // Blue-500
+          BLOCK_BORDER: '#bfdbfe',
+          PLATFORM: '#a855f7', // Purple-500 (Distinct from Block)
+          PLATFORM_BORDER: '#f3e8ff', // Purple-100
+          FLOOR: '#0f172a', // Slate-900
+          FLOOR_LINE: '#334155', // Slate-700
+          JUMP_PAD: '#facc15', // Yellow-400
+          JUMP_ORB: '#eab308', // Yellow-500
+          JUMP_ORB_INNER: '#fef08a', // Yellow-200
+        };
+
+        const CANVAS_WIDTH = 1280;
+        const CANVAS_HEIGHT = 720;
+
+        const LEVELS = [
+          { id: 1, name: "Stereo Madness", difficultyStr: "Easy", speed: 6.5, gravity: 0.75, jumpForce: -12.5, gapMin: 350, gapMax: 600, colorTop: '#1e1b4b', colorBottom: '#4c1d95' },
+          { id: 2, name: "Back on Track", difficultyStr: "Easy", speed: 7.0, gravity: 0.75, jumpForce: -12.5, gapMin: 350, gapMax: 580, colorTop: '#312e81', colorBottom: '#4338ca' },
+          { id: 3, name: "Polargeist", difficultyStr: "Normal", speed: 7.5, gravity: 0.8, jumpForce: -13, gapMin: 320, gapMax: 550, colorTop: '#064e3b', colorBottom: '#059669' },
+          { id: 4, name: "Dry Out", difficultyStr: "Normal", speed: 7.8, gravity: 0.8, jumpForce: -13, gapMin: 320, gapMax: 550, colorTop: '#451a03', colorBottom: '#92400e' },
+          { id: 5, name: "Base After Base", difficultyStr: "Hard", speed: 8.0, gravity: 0.85, jumpForce: -13.5, gapMin: 300, gapMax: 520, colorTop: '#111827', colorBottom: '#374151' },
+          { id: 6, name: "Can't Let Go", difficultyStr: "Hard", speed: 8.2, gravity: 0.85, jumpForce: -13.5, gapMin: 300, gapMax: 500, colorTop: '#4a044e', colorBottom: '#a21caf' },
+          { id: 7, name: "Jumper", difficultyStr: "Harder", speed: 8.5, gravity: 0.9, jumpForce: -14, gapMin: 280, gapMax: 480, colorTop: '#7f1d1d', colorBottom: '#dc2626' },
+          { id: 8, name: "Time Machine", difficultyStr: "Harder", speed: 8.8, gravity: 0.9, jumpForce: -14, gapMin: 280, gapMax: 480, colorTop: '#831843', colorBottom: '#db2777' },
+          { id: 9, name: "Cycles", difficultyStr: "Harder", speed: 9.0, gravity: 0.92, jumpForce: -14.5, gapMin: 260, gapMax: 450, colorTop: '#172554', colorBottom: '#2563eb' },
+          { id: 10, name: "xStep", difficultyStr: "Insane", speed: 9.5, gravity: 0.95, jumpForce: -15, gapMin: 260, gapMax: 450, colorTop: '#022c22', colorBottom: '#0d9488' },
+          { id: 11, name: "Clutterfunk", difficultyStr: "Insane", speed: 10.0, gravity: 0.95, jumpForce: -15, gapMin: 250, gapMax: 420, colorTop: '#3f6212', colorBottom: '#65a30d' },
+          { id: 12, name: "Theory of Everything", difficultyStr: "Insane", speed: 10.5, gravity: 1.0, jumpForce: -15.5, gapMin: 250, gapMax: 400, colorTop: '#4c0519', colorBottom: '#be123c' },
+          { id: 13, name: "Electroman", difficultyStr: "Demon", speed: 11.0, gravity: 1.1, jumpForce: -16, gapMin: 240, gapMax: 380, colorTop: '#0f172a', colorBottom: '#64748b' },
+          { id: 14, name: "Clubstep", difficultyStr: "Demon", speed: 11.5, gravity: 1.2, jumpForce: -16.5, gapMin: 240, gapMax: 380, colorTop: '#000000', colorBottom: '#3f3f46' },
+          { id: 15, name: "Electrodynamix", difficultyStr: "Demon", speed: 12.0, gravity: 1.3, jumpForce: -17, gapMin: 220, gapMax: 360, colorTop: '#2e1065', colorBottom: '#7c3aed' },
+        ];
+
+        // --- GAME COMPONENT ---
+        const NeonDash = () => {
+          // --- React State ---
+          const [gameState, setGameState] = useState(GameState.MENU);
+          const [percentage, setPercentage] = useState(0);
+          const [attempts, setAttempts] = useState(1);
+          const [currentLevelId, setCurrentLevelId] = useState(1);
+
+          // --- Refs ---
+          const canvasRef = useRef(null);
+          const requestRef = useRef(0);
+          
+          // Game Entities
+          const playerRef = useRef({
+            x: 200,
+            y: CANVAS_HEIGHT - FLOOR_HEIGHT - PLAYER_SIZE,
+            width: PLAYER_SIZE,
+            height: PLAYER_SIZE,
+            dy: 0,
+            prevY: 0,
+            isGrounded: true,
+            rotation: 0,
+            rotationVelocity: 0,
+            isDead: false,
+            color: COLORS.PLAYER
+          });
+
+          const obstaclesRef = useRef([]);
+          const particlesRef = useRef([]);
+          const bgOffsetRef = useRef(0);
+          const distanceTraveledRef = useRef(0);
+          const sawRotationRef = useRef(0);
+          
+          // Input
+          const isSpacePressedRef = useRef(false);
+          const wasSpacePressedRef = useRef(false);
+
+          // --- Initialization ---
+          const initGame = useCallback(() => {
+            playerRef.current = {
+              x: 200,
+              y: CANVAS_HEIGHT - FLOOR_HEIGHT - PLAYER_SIZE,
+              width: PLAYER_SIZE,
+              height: PLAYER_SIZE,
+              dy: 0,
+              prevY: CANVAS_HEIGHT - FLOOR_HEIGHT - PLAYER_SIZE,
+              isGrounded: true,
+              rotation: 0,
+              rotationVelocity: 0,
+              isDead: false,
+              color: COLORS.PLAYER
+            };
+            obstaclesRef.current = [];
+            particlesRef.current = [];
+            bgOffsetRef.current = 0;
+            distanceTraveledRef.current = 0;
+            setPercentage(0);
+            isSpacePressedRef.current = false;
+          }, []);
+
+          const startGame = () => {
+            initGame();
+            setGameState(GameState.PLAYING);
+          };
+
+          const restartGame = () => {
+            setAttempts(prev => prev + 1);
+            initGame();
+            setGameState(GameState.PLAYING);
+          };
+
+          const nextLevel = () => {
+              setCurrentLevelId(prev => Math.min(LEVELS.length, prev + 1));
+          };
+          
+          const prevLevel = () => {
+              setCurrentLevelId(prev => Math.max(1, prev - 1));
+          };
+
+          // --- Physics Helpers ---
+          const spawnObstacle = (lastX, level) => {
+            const gap = level.gapMin + Math.random() * (level.gapMax - level.gapMin);
+            let startX = lastX + gap;
+
+            // Pattern generation
+            const patternRoll = Math.random();
+            const isHighDifficulty = level.id >= 5;
+            
+            if (patternRoll < 0.20) {
+                // Simple Spike(s)
+                const count = Math.random() > 0.8 ? 3 : (Math.random() > 0.5 ? 2 : 1);
+                for(let i = 0; i < count; i++) {
+                    obstaclesRef.current.push({
+                        x: startX + (i * 40),
+                        y: CANVAS_HEIGHT - FLOOR_HEIGHT - 40,
+                        width: 40,
+                        height: 40,
+                        type: ObstacleType.SPIKE,
+                        color: COLORS.SPIKE,
+                        passed: false
+                    });
+                }
+            } 
+            else if (patternRoll < 0.35) {
+                // Block on ground (Walkable)
+                const width = 60;
+                const height = 60;
+                obstaclesRef.current.push({
+                    x: startX,
+                    y: CANVAS_HEIGHT - FLOOR_HEIGHT - height,
+                    width,
+                    height,
+                    type: ObstacleType.BLOCK,
+                    color: COLORS.BLOCK,
+                    passed: false
+                });
+                
+                // Maybe a spike on top?
+                if (Math.random() > 0.6) {
+                    obstaclesRef.current.push({
+                        x: startX + 15,
+                        y: CANVAS_HEIGHT - FLOOR_HEIGHT - height - 30,
+                        width: 30,
+                        height: 30,
+                        type: ObstacleType.SPIKE,
+                        color: COLORS.SPIKE,
+                        passed: false
+                    });
+                }
+            }
+            else if (patternRoll < 0.45) {
+                // NEW: Spike Tower (Rectangle on Triangle)
+                obstaclesRef.current.push({
+                    x: startX,
+                    y: CANVAS_HEIGHT - FLOOR_HEIGHT - 40,
+                    width: 40,
+                    height: 40,
+                    type: ObstacleType.SPIKE,
+                    color: COLORS.SPIKE,
+                    passed: false
+                });
+                obstaclesRef.current.push({
+                    x: startX,
+                    y: CANVAS_HEIGHT - FLOOR_HEIGHT - 80, // 40(spike) + 40(block)
+                    width: 40,
+                    height: 40,
+                    type: ObstacleType.BLOCK,
+                    color: COLORS.BLOCK,
+                    passed: false
+                });
+            }
+            else if (patternRoll < 0.60) {
+                // Staircase
+                obstaclesRef.current.push({
+                    x: startX,
+                    y: CANVAS_HEIGHT - FLOOR_HEIGHT - 50,
+                    width: 50,
+                    height: 50,
+                    type: ObstacleType.BLOCK,
+                    color: COLORS.BLOCK,
+                    passed: false
+                });
+                obstaclesRef.current.push({
+                    x: startX + 50,
+                    y: CANVAS_HEIGHT - FLOOR_HEIGHT - 100,
+                    width: 50,
+                    height: 100,
+                    type: ObstacleType.BLOCK,
+                    color: COLORS.BLOCK,
+                    passed: false
+                });
+            }
+            else if (patternRoll < 0.75) {
+                // Floating Platform
+                const height = 90; 
+                obstaclesRef.current.push({
+                    x: startX,
+                    y: CANVAS_HEIGHT - FLOOR_HEIGHT - height,
+                    width: 100,
+                    height: 40,
+                    type: ObstacleType.PLATFORM,
+                    color: COLORS.PLATFORM,
+                    passed: false
+                });
+                
+                // Spike under it?
+                if (Math.random() > 0.3) {
+                     obstaclesRef.current.push({
+                        x: startX + 30,
+                        y: CANVAS_HEIGHT - FLOOR_HEIGHT - 40,
+                        width: 40,
+                        height: 40,
+                        type: ObstacleType.SPIKE,
+                        color: COLORS.SPIKE,
+                        passed: false
+                    });
+                }
+            }
+            else if (isHighDifficulty && patternRoll < 0.85) {
+                // Boosters! (Pad or Orb)
+                if (Math.random() > 0.5) {
+                    // JUMP PAD Pattern
+                    obstaclesRef.current.push({
+                        x: startX,
+                        y: CANVAS_HEIGHT - FLOOR_HEIGHT - 50,
+                        width: 50,
+                        height: 50,
+                        type: ObstacleType.BLOCK,
+                        color: COLORS.BLOCK,
+                        passed: false
+                    });
+                    obstaclesRef.current.push({
+                        x: startX + 10,
+                        y: CANVAS_HEIGHT - FLOOR_HEIGHT - 50 - 10,
+                        width: 30,
+                        height: 10,
+                        type: ObstacleType.JUMP_PAD,
+                        color: COLORS.JUMP_PAD,
+                        passed: false
+                    });
+                    obstaclesRef.current.push({
+                        x: startX + 200,
+                        y: CANVAS_HEIGHT - FLOOR_HEIGHT - 40,
+                        width: 40,
+                        height: 40,
+                        type: ObstacleType.SPIKE,
+                        color: COLORS.SPIKE,
+                        passed: false
+                    });
+                } else {
+                    // JUMP ORB Pattern
+                    obstaclesRef.current.push({
+                        x: startX,
+                        y: CANVAS_HEIGHT - FLOOR_HEIGHT - 40,
+                        width: 40,
+                        height: 40,
+                        type: ObstacleType.SPIKE,
+                        color: COLORS.SPIKE,
+                        passed: false
+                    });
+                    obstaclesRef.current.push({
+                        x: startX + 100,
+                        y: CANVAS_HEIGHT - FLOOR_HEIGHT - 40,
+                        width: 40,
+                        height: 40,
+                        type: ObstacleType.SPIKE,
+                        color: COLORS.SPIKE,
+                        passed: false
+                    });
+
+                    obstaclesRef.current.push({
+                        x: startX + 50,
+                        y: CANVAS_HEIGHT - FLOOR_HEIGHT - 140,
+                        width: 50,
+                        height: 50,
+                        type: ObstacleType.JUMP_ORB,
+                        color: COLORS.JUMP_ORB,
+                        passed: false
+                    });
+                }
+            }
+            else {
+                // Saw Blade
+                obstaclesRef.current.push({
+                    x: startX,
+                    y: CANVAS_HEIGHT - FLOOR_HEIGHT - 70,
+                    width: 70,
+                    height: 70,
+                    type: ObstacleType.SAW,
+                    color: COLORS.SAW,
+                    passed: false
+                });
+            }
+          };
+
+          const createParticles = (x, y, color, count = 10) => {
+            for (let i = 0; i < count; i++) {
+              particlesRef.current.push({
+                x,
+                y,
+                vx: (Math.random() - 0.5) * 12,
+                vy: (Math.random() - 0.5) * 12,
+                life: 1.0,
+                color: color,
+                size: Math.random() * 5 + 2
+              });
+            }
+          };
+
+          // --- Game Loop ---
+          const update = useCallback(() => {
+            if (gameState !== GameState.PLAYING) return;
+
+            const player = playerRef.current;
+            const level = LEVELS.find(l => l.id === currentLevelId) || LEVELS[0];
+
+            player.prevY = player.y;
+
+            // 1. Update Distance
+            distanceTraveledRef.current += level.speed;
+            const currentPct = Math.min(100, Math.floor((distanceTraveledRef.current / LEVEL_LENGTH) * 100));
+            if (currentPct !== percentage) {
+                setPercentage(currentPct);
+            }
+
+            if (distanceTraveledRef.current >= LEVEL_LENGTH) {
+                setGameState(GameState.LEVEL_COMPLETE);
+                return;
+            }
+
+            // 2. Player Physics
+            player.dy += level.gravity;
+            player.y += player.dy;
+
+            // Floor Collision
+            const floorY = CANVAS_HEIGHT - FLOOR_HEIGHT - player.height;
+            
+            if (player.y > floorY) {
+              player.y = floorY;
+              player.dy = 0;
+              player.isGrounded = true;
+              
+              const rot = player.rotation % (Math.PI / 2);
+              if (rot < 0.1 || rot > (Math.PI / 2) - 0.1) {
+                  player.rotation = Math.round(player.rotation / (Math.PI / 2)) * (Math.PI / 2);
+                  player.rotationVelocity = 0;
+              } else {
+                  player.rotationVelocity = 0.15; 
+                  player.rotation += player.rotationVelocity;
+              }
+            } else {
+              if (!player.isGrounded) {
+                  player.rotation += 0.15;
+              }
+            }
+
+            // 3. Obstacles Movement & Spawning
+            const lastObstacle = obstaclesRef.current[obstaclesRef.current.length - 1];
+            if (!lastObstacle || lastObstacle.x < CANVAS_WIDTH + 600) {
+              spawnObstacle(lastObstacle ? lastObstacle.x : CANVAS_WIDTH, level);
+            }
+
+            obstaclesRef.current.forEach(obs => {
+              obs.x -= level.speed;
+            });
+
+            if (obstaclesRef.current.length > 0 && obstaclesRef.current[0].x + obstaclesRef.current[0].width < -200) {
+              obstaclesRef.current.shift();
+            }
+            
+            sawRotationRef.current -= 0.15;
+
+            // 4. Collision Detection
+            const pRect = {
+                l: player.x + 8, 
+                r: player.x + player.width - 8,
+                t: player.y + 8,
+                b: player.y + player.height - 8
+            };
+
+            let onAnyBlock = false;
+
+            for (const obs of obstaclesRef.current) {
+                if (obs.x > player.x + 100 || obs.x + obs.width < player.x - 100) continue;
+
+                const oRect = {
+                    l: obs.x + 2,
+                    r: obs.x + obs.width - 2,
+                    t: obs.y + 2,
+                    b: obs.y + obs.height - 2
+                };
+
+                const isColliding = (pRect.l < oRect.r && pRect.r > oRect.l && pRect.t < oRect.b && pRect.b > oRect.t);
+
+                if (isColliding) {
+                    if (obs.type === ObstacleType.SPIKE || obs.type === ObstacleType.SAW) {
+                        createParticles(player.x + player.width/2, player.y + player.height/2, COLORS.PLAYER, 30);
+                        setGameState(GameState.GAME_OVER);
+                        return;
+                    } 
+                    else if (obs.type === ObstacleType.JUMP_PAD) {
+                        player.dy = level.jumpForce * 1.4;
+                        player.isGrounded = false;
+                        player.rotationVelocity = 0.2; 
+                        createParticles(player.x + player.width/2, player.y + player.height, COLORS.JUMP_PAD, 10);
+                    }
+                    else if (obs.type === ObstacleType.JUMP_ORB) {
+                        if (isSpacePressedRef.current && !obs.passed) {
+                            player.dy = level.jumpForce;
+                            player.isGrounded = false;
+                            obs.passed = true; 
+                            createParticles(obs.x + obs.width/2, obs.y + obs.height/2, COLORS.JUMP_ORB, 15);
+                        }
+                    }
+                    else if (obs.type === ObstacleType.BLOCK || obs.type === ObstacleType.PLATFORM) {
+                        const prevBottom = player.prevY + player.height;
+                        const tolerance = Math.max(20, player.dy + 10);
+                        const isFalling = player.dy >= 0;
+                        const wasAbove = prevBottom <= obs.y + tolerance;
+                        const isTopCollision = (player.y + player.height) >= obs.y && (player.y + player.height) <= (obs.y + 25);
+
+                        if (isFalling && (wasAbove || isTopCollision)) {
+                            player.y = obs.y - player.height;
+                            player.dy = 0;
+                            player.isGrounded = true;
+                            onAnyBlock = true;
+                            
+                            const rot = player.rotation % (Math.PI / 2);
+                            if (rot < 0.1 || rot > (Math.PI / 2) - 0.1) {
+                                player.rotation = Math.round(player.rotation / (Math.PI / 2)) * (Math.PI / 2);
+                            } else {
+                                player.rotation += 0.2;
+                            }
+                        } else {
+                            if (obs.type === ObstacleType.PLATFORM) {
+                                // Pass-through
+                            } else {
+                                createParticles(player.x + player.width/2, player.y + player.height/2, COLORS.PLAYER, 30);
+                                setGameState(GameState.GAME_OVER);
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (player.y < floorY && !onAnyBlock) {
+                player.isGrounded = false;
+            }
+
+            if (isSpacePressedRef.current && player.isGrounded) {
+              player.dy = level.jumpForce;
+              player.isGrounded = false;
+              isSpacePressedRef.current = false; 
+            }
+
+            particlesRef.current.forEach(p => {
+              p.x += p.vx;
+              p.y += p.vy;
+              p.life -= 0.03;
+            });
+            particlesRef.current = particlesRef.current.filter(p => p.life > 0);
+
+            bgOffsetRef.current = (bgOffsetRef.current + level.speed * 0.15) % CANVAS_WIDTH;
+            wasSpacePressedRef.current = isSpacePressedRef.current;
+
+          }, [gameState, currentLevelId, percentage]);
+
+          // --- Render Loop ---
+          const draw = useCallback(() => {
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) return;
+
+            const level = LEVELS.find(l => l.id === currentLevelId) || LEVELS[0];
+
+            const gradient = ctx.createLinearGradient(0, 0, 0, CANVAS_HEIGHT);
+            gradient.addColorStop(0, level.colorTop);
+            gradient.addColorStop(1, level.colorBottom);
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+            ctx.lineWidth = 2;
+            const gridSize = 80;
+            const offset = bgOffsetRef.current;
+            
+            for (let x = -offset % gridSize; x < CANVAS_WIDTH; x += gridSize) {
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, CANVAS_HEIGHT);
+                ctx.stroke();
+            }
+            ctx.beginPath();
+            ctx.moveTo(0, CANVAS_HEIGHT/2);
+            ctx.lineTo(CANVAS_WIDTH, CANVAS_HEIGHT/2);
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+            ctx.stroke();
+
+            ctx.fillStyle = COLORS.FLOOR;
+            ctx.fillRect(0, CANVAS_HEIGHT - FLOOR_HEIGHT, CANVAS_WIDTH, FLOOR_HEIGHT);
+            
+            ctx.strokeStyle = COLORS.FLOOR_LINE;
+            ctx.lineWidth = 4;
+            ctx.beginPath();
+            ctx.moveTo(0, CANVAS_HEIGHT - FLOOR_HEIGHT);
+            ctx.lineTo(CANVAS_WIDTH, CANVAS_HEIGHT - FLOOR_HEIGHT);
+            ctx.stroke();
+
+            obstaclesRef.current.forEach(obs => {
+                ctx.shadowBlur = 0;
+                
+                if (obs.type === ObstacleType.SPIKE) {
+                    ctx.fillStyle = COLORS.SPIKE;
+                    ctx.beginPath();
+                    ctx.moveTo(obs.x, obs.y + obs.height);
+                    ctx.lineTo(obs.x + obs.width / 2, obs.y);
+                    ctx.lineTo(obs.x + obs.width, obs.y + obs.height);
+                    ctx.closePath();
+                    ctx.fill();
+                    ctx.strokeStyle = 'white';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                } else if (obs.type === ObstacleType.BLOCK || obs.type === ObstacleType.PLATFORM) {
+                    // Check type for color
+                    const isPlatform = obs.type === ObstacleType.PLATFORM;
+                    const color = isPlatform ? COLORS.PLATFORM : COLORS.BLOCK;
+                    const borderColor = isPlatform ? COLORS.PLATFORM_BORDER : COLORS.BLOCK_BORDER;
+
+                    ctx.fillStyle = color;
+                    ctx.fillRect(obs.x, obs.y, obs.width, obs.height);
+                    
+                    ctx.strokeStyle = borderColor;
+                    ctx.lineWidth = 3;
+                    ctx.strokeRect(obs.x, obs.y, obs.width, obs.height);
+
+                    ctx.beginPath();
+                    ctx.lineWidth = 2;
+                    ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+                    ctx.strokeRect(obs.x + 8, obs.y + 8, obs.width - 16, obs.height - 16);
+                    ctx.beginPath();
+                    ctx.moveTo(obs.x, obs.y);
+                    ctx.lineTo(obs.x + 10, obs.y + 10);
+                    ctx.moveTo(obs.x + obs.width, obs.y);
+                    ctx.lineTo(obs.x + obs.width - 10, obs.y + 10);
+                    ctx.moveTo(obs.x, obs.y + obs.height);
+                    ctx.lineTo(obs.x + 10, obs.y + obs.height - 10);
+                    ctx.moveTo(obs.x + obs.width, obs.y + obs.height);
+                    ctx.lineTo(obs.x + obs.width - 10, obs.y + obs.height - 10);
+                    ctx.stroke();
+
+                } else if (obs.type === ObstacleType.SAW) {
+                    ctx.save();
+                    ctx.translate(obs.x + obs.width/2, obs.y + obs.height/2);
+                    ctx.rotate(sawRotationRef.current);
+                    
+                    ctx.fillStyle = COLORS.SAW;
+                    ctx.beginPath();
+                    const outerRadius = obs.width/2;
+                    const innerRadius = obs.width/4;
+                    const spikes = 8;
+                    for(let i=0; i<spikes*2; i++){
+                        const r = (i%2===0) ? outerRadius : innerRadius;
+                        const a = (Math.PI * i) / spikes;
+                        ctx.lineTo(Math.cos(a)*r, Math.sin(a)*r);
+                    }
+                    ctx.closePath();
+                    ctx.fill();
+                    ctx.strokeStyle = 'white';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                    
+                    ctx.beginPath();
+                    ctx.arc(0, 0, 10, 0, Math.PI*2);
+                    ctx.fillStyle = COLORS.SAW_CENTER;
+                    ctx.fill();
+                    
+                    ctx.restore();
+                } else if (obs.type === ObstacleType.JUMP_PAD) {
+                    ctx.fillStyle = COLORS.JUMP_PAD;
+                    ctx.beginPath();
+                    ctx.moveTo(obs.x, obs.y + obs.height);
+                    ctx.quadraticCurveTo(obs.x + obs.width/2, obs.y, obs.x + obs.width, obs.y + obs.height);
+                    ctx.fill();
+                    ctx.strokeStyle = 'white';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                    
+                    ctx.strokeStyle = 'rgba(255,255,0, 0.5)';
+                    ctx.beginPath();
+                    ctx.arc(obs.x + obs.width/2, obs.y + obs.height, obs.width/2 - 5, Math.PI, 0);
+                    ctx.stroke();
+                } else if (obs.type === ObstacleType.JUMP_ORB) {
+                     const pulse = Math.sin(Date.now() / 100) * 2;
+                     const cx = obs.x + obs.width/2;
+                     const cy = obs.y + obs.height/2;
+                     const r = obs.width/2 + pulse;
+
+                     ctx.beginPath();
+                     ctx.arc(cx, cy, r, 0, Math.PI*2);
+                     ctx.fillStyle = COLORS.JUMP_ORB;
+                     ctx.fill();
+                     
+                     ctx.beginPath();
+                     ctx.arc(cx, cy, r * 0.7, 0, Math.PI*2);
+                     ctx.strokeStyle = COLORS.JUMP_ORB_INNER;
+                     ctx.lineWidth = 4;
+                     ctx.stroke();
+
+                     if (obs.passed) {
+                         ctx.fillStyle = 'rgba(255,255,255,0.5)';
+                         ctx.fill();
+                     }
+                }
+            });
+
+            const p = playerRef.current;
+            if (!p.isDead && gameState !== GameState.GAME_OVER) {
+                ctx.save();
+                ctx.translate(p.x + p.width / 2, p.y + p.height / 2);
+                ctx.rotate(p.rotation);
+                
+                ctx.shadowBlur = 15;
+                ctx.shadowColor = p.color;
+                ctx.fillStyle = p.color;
+                ctx.fillRect(-p.width / 2, -p.height / 2, p.width, p.height);
+                
+                ctx.fillStyle = COLORS.PLAYER_BORDER;
+                ctx.fillRect(-p.width / 4, -p.height / 4, p.width / 2, p.height / 2);
+
+                ctx.restore();
+            }
+
+            ctx.shadowBlur = 0;
+            particlesRef.current.forEach(part => {
+                ctx.globalAlpha = part.life;
+                ctx.fillStyle = part.color;
+                ctx.beginPath();
+                ctx.arc(part.x, part.y, part.size, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.globalAlpha = 1.0;
+            });
+
+            if (gameState === GameState.PLAYING) {
+                requestRef.current = requestAnimationFrame(() => {
+                    update();
+                    draw();
+                });
+            }
+
+          }, [gameState, update, currentLevelId]);
+
+          // --- Effects ---
+          useEffect(() => {
+            if (gameState === GameState.PLAYING) {
+                requestRef.current = requestAnimationFrame(() => {
+                    update();
+                    draw();
+                });
+            }
+            return () => cancelAnimationFrame(requestRef.current);
+          }, [gameState, update, draw]);
+
+          useEffect(() => {
+              if (gameState === GameState.MENU) {
+                  initGame();
+                  setTimeout(() => draw(), 50);
+              }
+          }, [gameState, initGame, draw]);
+
+          useEffect(() => {
+            const handleKeyDown = (e) => {
+              if (e.target.tagName === 'BUTTON') return; // FIX: Ignore button clicks
+
+              if (e.code === 'Space' || e.code === 'ArrowUp') {
+                e.preventDefault();
+                isSpacePressedRef.current = true;
+                if (gameState !== GameState.PLAYING && gameState !== GameState.MENU) {
+                     restartGame();
+                }
+              }
+            };
+            const handleKeyUp = (e) => {
+                if (e.code === 'Space' || e.code === 'ArrowUp') {
+                    isSpacePressedRef.current = false;
+                }
+            };
+            const handleTouchStart = (e) => {
+                if (e.target.closest('button')) return; // FIX: Ignore button touches
+
+                isSpacePressedRef.current = true;
+                if (gameState !== GameState.PLAYING && gameState !== GameState.MENU) {
+                    restartGame();
+                }
+            };
+            const handleTouchEnd = () => { isSpacePressedRef.current = false; };
+
+            window.addEventListener('keydown', handleKeyDown);
+            window.addEventListener('keyup', handleKeyUp);
+            window.addEventListener('touchstart', handleTouchStart);
+            window.addEventListener('touchend', handleTouchEnd);
+
+            return () => {
+              window.removeEventListener('keydown', handleKeyDown);
+              window.removeEventListener('keyup', handleKeyUp);
+              window.removeEventListener('touchstart', handleTouchStart);
+              window.removeEventListener('touchend', handleTouchEnd);
+            };
+          }, [gameState]);
+
+          const currentLevel = LEVELS.find(l => l.id === currentLevelId) || LEVELS[0];
+
+          return (
+            <div className="relative w-full h-full flex justify-center items-center bg-black overflow-hidden h-screen">
+              <canvas
+                ref={canvasRef}
+                width={CANVAS_WIDTH}
+                height={CANVAS_HEIGHT}
+                className="w-full h-full object-contain max-w-full max-h-full shadow-2xl"
+                onMouseDown={(e) => {
+                     if (e.target.closest('button')) return;
+                     isSpacePressedRef.current = true;
+                }}
+                onMouseUp={() => isSpacePressedRef.current = false}
+              />
+
+              {/* HUD */}
+              {gameState === GameState.PLAYING && (
+                <div className="absolute top-8 left-0 w-full px-10 flex flex-col items-center pointer-events-none">
+                    <div className="w-full max-w-3xl h-4 bg-slate-800/50 rounded-full overflow-hidden border border-slate-600 backdrop-blur-sm">
+                        <div 
+                            className="h-full bg-gradient-to-r from-cyan-400 to-blue-600 transition-all duration-75 ease-linear"
+                            style={{ width: `${percentage}%` }}
+                        />
+                    </div>
+                    <div className="mt-2 font-arcade text-4xl font-bold text-white drop-shadow-lg tracking-widest">
+                        {percentage}%
+                    </div>
+                    <div className="absolute top-2 right-10 text-white/50 font-arcade">
+                        {currentLevel.name}
+                    </div>
+                </div>
+              )}
+
+              {/* MENU */}
+              {gameState === GameState.MENU && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 backdrop-blur-sm z-10">
+                  <h1 className="text-6xl md:text-8xl font-arcade font-bold text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-600 mb-8 drop-shadow-[0_0_15px_rgba(6,182,212,0.8)]">
+                    NEON DASH
+                  </h1>
+                  
+                  <div className="w-full max-w-2xl flex items-center justify-between mb-10 px-4">
+                     <button 
+                        onClick={prevLevel}
+                        className="p-4 rounded-full bg-white/10 hover:bg-white/20 text-white transition-all active:scale-90 cursor-pointer"
+                     >
+                        <ChevronLeft size={48} />
+                     </button>
+                     
+                     <div className="flex flex-col items-center w-full animate-in fade-in slide-in-from-right-4 duration-300" key={currentLevelId}>
+                         <div 
+                            className="w-64 h-64 mb-4 rounded-xl border-4 shadow-[0_0_30px_rgba(255,255,255,0.1)] flex items-center justify-center relative overflow-hidden"
+                            style={{ 
+                                borderColor: currentLevel.colorTop,
+                                background: `linear-gradient(135deg, ${currentLevel.colorTop}, ${currentLevel.colorBottom})`
+                            }}
+                         >
+                             <div className="absolute inset-0 opacity-30 bg-[url('https://www.transparenttextures.com/patterns/diagmonds-light.png')]"></div>
+                             <span className="font-arcade text-6xl font-bold text-white/20">{currentLevel.id}</span>
+                         </div>
+                         
+                         <h2 className="text-4xl font-arcade font-bold text-white mb-2 text-center">{currentLevel.name}</h2>
+                         <div className="flex items-center gap-2 text-cyan-300 font-arcade text-xl">
+                            <span>{currentLevel.difficultyStr}</span>
+                         </div>
+                     </div>
+
+                     <button 
+                        onClick={nextLevel}
+                        className="p-4 rounded-full bg-white/10 hover:bg-white/20 text-white transition-all active:scale-90 cursor-pointer"
+                     >
+                        <ChevronRight size={48} />
+                     </button>
+                  </div>
+
+                  <button 
+                    onClick={startGame}
+                    className="group relative px-16 py-6 bg-cyan-600 hover:bg-cyan-500 text-white font-arcade font-bold text-3xl rounded-xl transition-all hover:scale-105 active:scale-95 shadow-[0_0_30px_rgba(8,145,178,0.6)] cursor-pointer"
+                  >
+                    <span className="flex items-center gap-3">
+                      <Play fill="currentColor" size={32} /> PLAY
+                    </span>
+                  </button>
+                </div>
+              )}
+
+              {/* Game Over */}
+              {gameState === GameState.GAME_OVER && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 backdrop-blur-md z-20">
+                  <h2 className="text-6xl font-arcade font-bold text-red-500 mb-4 drop-shadow-[0_0_10px_rgba(239,68,68,0.8)]">
+                    CRASHED!
+                  </h2>
+                  
+                  <div className="w-full max-w-md h-4 bg-slate-800 rounded-full overflow-hidden mb-2">
+                     <div className="h-full bg-red-500" style={{ width: `${percentage}%` }} />
+                  </div>
+                  <span className="text-6xl font-arcade font-bold text-white mb-8">{percentage}%</span>
+
+                  <button 
+                    onClick={restartGame}
+                    className="flex items-center gap-3 px-10 py-5 bg-white text-black font-arcade font-bold text-xl rounded-lg hover:bg-slate-200 transition-all hover:scale-105 active:scale-95 cursor-pointer"
+                  >
+                    <RotateCcw size={24} /> RESTART
+                  </button>
+                  <button 
+                     onClick={() => setGameState(GameState.MENU)}
+                     className="mt-4 text-slate-400 hover:text-white font-arcade underline underline-offset-4 cursor-pointer p-2"
+                  >
+                      Exit to Menu
+                  </button>
+                </div>
+              )}
+
+              {/* Level Complete */}
+              {gameState === GameState.LEVEL_COMPLETE && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-green-900/95 to-black/95 backdrop-blur-md z-20">
+                   <CheckCircle className="text-green-400 mb-4 w-24 h-24 drop-shadow-[0_0_20px_rgba(74,222,128,0.6)] animate-bounce" />
+                   <h2 className="text-6xl font-arcade font-bold text-white mb-4">
+                    LEVEL COMPLETE!
+                  </h2>
+                  <div className="text-4xl font-arcade text-green-400 mb-8">{currentLevel.name}</div>
+                  
+                  <button 
+                    onClick={() => setGameState(GameState.MENU)}
+                    className="flex items-center gap-3 px-12 py-6 bg-green-600 text-white font-arcade font-bold text-2xl rounded-xl hover:bg-green-500 transition-all hover:scale-105 active:scale-95 shadow-[0_0_20px_rgba(22,163,74,0.5)] cursor-pointer"
+                  >
+                     CONTINUE
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        };
+
+        // --- ENTRY POINT ---
+        const root = createRoot(document.getElementById('root'));
+        root.render(<NeonDash />);
+    </script>
 </body>
 </html>
