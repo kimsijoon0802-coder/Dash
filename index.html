@@ -23,6 +23,51 @@
         .font-arcade {
             font-family: 'Orbitron', sans-serif;
         }
+
+        /* Electric Text Effects */
+        .neon-blue {
+            color: #fff;
+            text-shadow: 
+                0 0 5px #fff,
+                0 0 10px #fff,
+                0 0 20px #06b6d4,
+                0 0 35px #06b6d4,
+                0 0 40px #06b6d4,
+                0 0 50px #06b6d4;
+        }
+        .neon-red {
+            color: #fff;
+            text-shadow: 
+                0 0 5px #fff,
+                0 0 10px #fff,
+                0 0 20px #ef4444,
+                0 0 35px #ef4444,
+                0 0 40px #ef4444,
+                0 0 50px #ef4444;
+        }
+        .neon-green {
+            color: #fff;
+            text-shadow: 
+                0 0 5px #fff,
+                0 0 10px #fff,
+                0 0 20px #22c55e,
+                0 0 35px #22c55e,
+                0 0 40px #22c55e,
+                0 0 50px #22c55e;
+        }
+        .neon-white {
+            color: #fff;
+            text-shadow: 0 0 2px #fff, 0 0 5px #fff, 0 0 10px #ffffff;
+        }
+        
+        @keyframes electric-flicker {
+            0%, 19%, 21%, 23%, 25%, 54%, 56%, 100% { opacity: 1; }
+            20%, 24%, 55% { opacity: 0.5; }
+        }
+        
+        .animate-flicker {
+            animation: electric-flicker 3s infinite;
+        }
     </style>
 <script type="importmap">
 {
@@ -43,7 +88,7 @@
     <script type="text/babel" data-type="module">
         import React, { useEffect, useRef, useState, useCallback } from 'react';
         import { createRoot } from 'react-dom/client';
-        import { Play, RotateCcw, CheckCircle, ChevronRight, ChevronLeft, Lock } from 'lucide-react';
+        import { Play, RotateCcw, CheckCircle, ChevronRight, ChevronLeft, Lock, Trophy } from 'lucide-react';
 
         // --- CONSTANTS & TYPES (Merged) ---
         
@@ -112,6 +157,7 @@
           const [percentage, setPercentage] = useState(0);
           const [attempts, setAttempts] = useState(1);
           const [currentLevelId, setCurrentLevelId] = useState(1);
+          const [bestScore, setBestScore] = useState(0);
 
           // --- Refs ---
           const canvasRef = useRef(null);
@@ -141,6 +187,30 @@
           // Input
           const isSpacePressedRef = useRef(false);
           const wasSpacePressedRef = useRef(false);
+
+          // --- Helpers for Storage ---
+          const getSavedBestScore = (levelId) => {
+            try {
+                const saved = localStorage.getItem(`neon-dash-level-${levelId}`);
+                return saved ? parseInt(saved, 10) : 0;
+            } catch (e) {
+                return 0;
+            }
+          };
+
+          const saveBestScore = (levelId, score) => {
+            try {
+                localStorage.setItem(`neon-dash-level-${levelId}`, score.toString());
+            } catch (e) {
+                console.error("Failed to save score", e);
+            }
+          };
+
+          // --- Effects for Score ---
+          useEffect(() => {
+             // Update best score state when level changes
+             setBestScore(getSavedBestScore(currentLevelId));
+          }, [currentLevelId]);
 
           // --- Initialization ---
           const initGame = useCallback(() => {
@@ -411,6 +481,9 @@
             }
 
             if (distanceTraveledRef.current >= LEVEL_LENGTH) {
+                // Save 100% record
+                saveBestScore(currentLevelId, 100);
+                setBestScore(100);
                 setGameState(GameState.LEVEL_COMPLETE);
                 return;
             }
@@ -482,6 +555,15 @@
                 if (isColliding) {
                     if (obs.type === ObstacleType.SPIKE || obs.type === ObstacleType.SAW) {
                         createParticles(player.x + player.width/2, player.y + player.height/2, COLORS.PLAYER, 30);
+                        
+                        // Handle High Score Logic
+                        const finalPct = Math.floor((distanceTraveledRef.current / LEVEL_LENGTH) * 100);
+                        const saved = getSavedBestScore(currentLevelId);
+                        if (finalPct > saved) {
+                            saveBestScore(currentLevelId, finalPct);
+                            setBestScore(finalPct);
+                        }
+                        
                         setGameState(GameState.GAME_OVER);
                         return;
                     } 
@@ -523,6 +605,15 @@
                                 // Pass-through
                             } else {
                                 createParticles(player.x + player.width/2, player.y + player.height/2, COLORS.PLAYER, 30);
+                                
+                                // Handle High Score Logic
+                                const finalPct = Math.floor((distanceTraveledRef.current / LEVEL_LENGTH) * 100);
+                                const saved = getSavedBestScore(currentLevelId);
+                                if (finalPct > saved) {
+                                    saveBestScore(currentLevelId, finalPct);
+                                    setBestScore(finalPct);
+                                }
+
                                 setGameState(GameState.GAME_OVER);
                                 return;
                             }
@@ -821,8 +912,12 @@
                             style={{ width: `${percentage}%` }}
                         />
                     </div>
-                    <div className="mt-2 font-arcade text-4xl font-bold text-white drop-shadow-lg tracking-widest">
+                    <div className="mt-2 font-arcade text-4xl font-bold neon-white tracking-widest">
                         {percentage}%
+                    </div>
+                    <div className="absolute top-4 left-10 text-white/80 font-arcade flex items-center gap-2">
+                         <Trophy size={16} className="text-yellow-400" /> 
+                         <span>Best: {Math.max(percentage, bestScore)}%</span>
                     </div>
                     <div className="absolute top-2 right-10 text-white/50 font-arcade">
                         {currentLevel.name}
@@ -833,7 +928,7 @@
               {/* MENU */}
               {gameState === GameState.MENU && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 backdrop-blur-sm z-10">
-                  <h1 className="text-6xl md:text-8xl font-arcade font-bold text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-600 mb-8 drop-shadow-[0_0_15px_rgba(6,182,212,0.8)]">
+                  <h1 className="text-6xl md:text-8xl font-arcade font-bold neon-blue mb-8 animate-flicker">
                     NEON DASH
                   </h1>
                   
@@ -857,9 +952,13 @@
                              <span className="font-arcade text-6xl font-bold text-white/20">{currentLevel.id}</span>
                          </div>
                          
-                         <h2 className="text-4xl font-arcade font-bold text-white mb-2 text-center">{currentLevel.name}</h2>
-                         <div className="flex items-center gap-2 text-cyan-300 font-arcade text-xl">
-                            <span>{currentLevel.difficultyStr}</span>
+                         <h2 className="text-4xl font-arcade font-bold neon-blue mb-2 text-center">{currentLevel.name}</h2>
+                         <div className="flex flex-col items-center gap-1 font-arcade text-xl">
+                            <span className="text-cyan-300">{currentLevel.difficultyStr}</span>
+                            <div className="flex items-center gap-2 text-yellow-400 mt-1">
+                                <Trophy size={20} />
+                                <span>BEST: {bestScore}%</span>
+                            </div>
                          </div>
                      </div>
 
@@ -885,14 +984,19 @@
               {/* Game Over */}
               {gameState === GameState.GAME_OVER && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 backdrop-blur-md z-20">
-                  <h2 className="text-6xl font-arcade font-bold text-red-500 mb-4 drop-shadow-[0_0_10px_rgba(239,68,68,0.8)]">
+                  <h2 className="text-6xl font-arcade font-bold neon-red mb-4">
                     CRASHED!
                   </h2>
                   
                   <div className="w-full max-w-md h-4 bg-slate-800 rounded-full overflow-hidden mb-2">
                      <div className="h-full bg-red-500" style={{ width: `${percentage}%` }} />
                   </div>
-                  <span className="text-6xl font-arcade font-bold text-white mb-8">{percentage}%</span>
+                  <span className="text-6xl font-arcade font-bold neon-white mb-2">{percentage}%</span>
+                  
+                  <div className="flex items-center gap-2 text-yellow-400 font-arcade text-xl mb-8">
+                        <Trophy size={20} />
+                        <span>Personal Best: {bestScore}%</span>
+                  </div>
 
                   <button 
                     onClick={restartGame}
@@ -913,7 +1017,7 @@
               {gameState === GameState.LEVEL_COMPLETE && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-green-900/95 to-black/95 backdrop-blur-md z-20">
                    <CheckCircle className="text-green-400 mb-4 w-24 h-24 drop-shadow-[0_0_20px_rgba(74,222,128,0.6)] animate-bounce" />
-                   <h2 className="text-6xl font-arcade font-bold text-white mb-4">
+                   <h2 className="text-6xl font-arcade font-bold neon-green mb-4">
                     LEVEL COMPLETE!
                   </h2>
                   <div className="text-4xl font-arcade text-green-400 mb-8">{currentLevel.name}</div>
