@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { GameState, Player, Obstacle, ObstacleType, Particle, LevelData } from '../types';
+import { Play, RotateCcw, CheckCircle, ChevronRight, ChevronLeft, Trophy, Volume2, VolumeX } from 'lucide-react';
+import { GameState, ObstacleType } from '../types';
 import { 
   CANVAS_HEIGHT, 
   CANVAS_WIDTH, 
@@ -9,27 +10,34 @@ import {
   LEVELS,
   LEVEL_LENGTH
 } from '../constants';
-import { Play, RotateCcw, CheckCircle, ChevronRight, ChevronLeft, Lock } from 'lucide-react';
 
-export const NeonDash: React.FC = () => {
+export const NeonDash = () => {
   // --- React State ---
   const [gameState, setGameState] = useState<GameState>(GameState.MENU);
   const [percentage, setPercentage] = useState(0);
   const [attempts, setAttempts] = useState(1);
-  const [currentLevelId, setCurrentLevelId] = useState<number>(1);
+  const [currentLevelId, setCurrentLevelId] = useState(1);
+  const [bestScore, setBestScore] = useState(0);
+  const [isMuted, setIsMuted] = useState(false);
 
   // --- Refs ---
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const requestRef = useRef<number>(0);
   
+  // Audio Context
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  
+  // Seed for deterministic generation
+  const seedRef = useRef<number>(1);
+
   // Game Entities
-  const playerRef = useRef<Player>({
+  const playerRef = useRef({
     x: 200,
     y: CANVAS_HEIGHT - FLOOR_HEIGHT - PLAYER_SIZE,
     width: PLAYER_SIZE,
     height: PLAYER_SIZE,
     dy: 0,
-    prevY: 0,
+    prevY: CANVAS_HEIGHT - FLOOR_HEIGHT - PLAYER_SIZE,
     isGrounded: true,
     rotation: 0,
     rotationVelocity: 0,
@@ -37,15 +45,123 @@ export const NeonDash: React.FC = () => {
     color: COLORS.PLAYER
   });
 
-  const obstaclesRef = useRef<Obstacle[]>([]);
-  const particlesRef = useRef<Particle[]>([]);
-  const bgOffsetRef = useRef<number>(0);
-  const distanceTraveledRef = useRef<number>(0);
-  const sawRotationRef = useRef<number>(0);
+  const obstaclesRef = useRef<any[]>([]);
+  const particlesRef = useRef<any[]>([]);
+  const bgOffsetRef = useRef(0);
+  const distanceTraveledRef = useRef(0);
+  const sawRotationRef = useRef(0);
   
   // Input
-  const isSpacePressedRef = useRef<boolean>(false);
-  const wasSpacePressedRef = useRef<boolean>(false); // Track if space was pressed previous frame (for edge detection)
+  const isSpacePressedRef = useRef(false);
+  const wasSpacePressedRef = useRef(false);
+
+  // --- Helpers for Storage ---
+  const getSavedBestScore = (levelId: number) => {
+    try {
+        const saved = localStorage.getItem(`neon-dash-level-${levelId}`);
+        return saved ? parseInt(saved, 10) : 0;
+    } catch (e) {
+        return 0;
+    }
+  };
+
+  const saveBestScore = (levelId: number, score: number) => {
+    try {
+        localStorage.setItem(`neon-dash-level-${levelId}`, score.toString());
+    } catch (e) {
+        console.error("Failed to save score", e);
+    }
+  };
+
+  // --- Deterministic Random Number Generator (Mulberry32) ---
+  // Guaranteed to produce the exact same sequence for a given seed
+  const getRandom = useCallback(() => {
+    let t = seedRef.current += 0x6D2B79F5;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }, []);
+
+  // --- Audio System ---
+  const initAudio = useCallback(() => {
+      if (isMuted) return;
+      if (!audioCtxRef.current) {
+          const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+          if (AudioContextClass) {
+              audioCtxRef.current = new AudioContextClass();
+          }
+      }
+      if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
+          audioCtxRef.current.resume();
+      }
+  }, [isMuted]);
+
+  const playSound = useCallback((type: 'jump' | 'crash' | 'win' | 'pad' | 'orb') => {
+      if (isMuted || !audioCtxRef.current) return;
+
+      const ctx = audioCtxRef.current;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      const now = ctx.currentTime;
+
+      if (type === 'jump') {
+          // Quick pitch sweep up
+          osc.type = 'square';
+          osc.frequency.setValueAtTime(150, now);
+          osc.frequency.exponentialRampToValueAtTime(300, now + 0.1);
+          gain.gain.setValueAtTime(0.05, now); 
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+          osc.start(now);
+          osc.stop(now + 0.1);
+      } else if (type === 'crash') {
+          // Noise-like saw with decay
+          osc.type = 'sawtooth';
+          osc.frequency.setValueAtTime(100, now);
+          osc.frequency.exponentialRampToValueAtTime(10, now + 0.3);
+          gain.gain.setValueAtTime(0.1, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+          osc.start(now);
+          osc.stop(now + 0.3);
+      } else if (type === 'win') {
+           // Major arpeggio
+           osc.type = 'triangle';
+           osc.frequency.setValueAtTime(440, now);
+           osc.frequency.setValueAtTime(554, now + 0.1);
+           osc.frequency.setValueAtTime(659, now + 0.2);
+           osc.frequency.setValueAtTime(880, now + 0.3);
+           gain.gain.setValueAtTime(0.1, now);
+           gain.gain.linearRampToValueAtTime(0, now + 0.8);
+           osc.start(now);
+           osc.stop(now + 0.8);
+      } else if (type === 'pad') {
+           // Spring sound
+           osc.type = 'sine';
+           osc.frequency.setValueAtTime(300, now);
+           osc.frequency.linearRampToValueAtTime(600, now + 0.15);
+           gain.gain.setValueAtTime(0.1, now);
+           gain.gain.linearRampToValueAtTime(0, now + 0.2);
+           osc.start(now);
+           osc.stop(now + 0.2);
+      } else if (type === 'orb') {
+           // High ping
+           osc.type = 'sine';
+           osc.frequency.setValueAtTime(600, now);
+           osc.frequency.exponentialRampToValueAtTime(1200, now + 0.1);
+           gain.gain.setValueAtTime(0.08, now);
+           gain.gain.linearRampToValueAtTime(0, now + 0.15);
+           osc.start(now);
+           osc.stop(now + 0.15);
+      }
+  }, [isMuted]);
+
+  // --- Effects for Score ---
+  useEffect(() => {
+     setBestScore(getSavedBestScore(currentLevelId));
+  }, [currentLevelId]);
 
   // --- Initialization ---
   const initGame = useCallback(() => {
@@ -68,9 +184,15 @@ export const NeonDash: React.FC = () => {
     distanceTraveledRef.current = 0;
     setPercentage(0);
     isSpacePressedRef.current = false;
-  }, []);
+    
+    // IMPORTANT: Reset seed based on Level ID.
+    // Use Level ID to seed. Using bitwise shift to ensure good spread.
+    seedRef.current = currentLevelId * 1000 + 12345;
+
+  }, [currentLevelId]);
 
   const startGame = () => {
+    initAudio();
     initGame();
     setGameState(GameState.PLAYING);
   };
@@ -90,17 +212,18 @@ export const NeonDash: React.FC = () => {
   };
 
   // --- Physics Helpers ---
-  const spawnObstacle = (lastX: number, level: LevelData) => {
-    const gap = level.gapMin + Math.random() * (level.gapMax - level.gapMin);
+  const spawnObstacle = (lastX: number, level: any) => {
+    // Use getRandom() instead of Math.random() for ALL generation logic
+    const gap = level.gapMin + getRandom() * (level.gapMax - level.gapMin);
     let startX = lastX + gap;
 
     // Pattern generation
-    const patternRoll = Math.random();
+    const patternRoll = getRandom();
     const isHighDifficulty = level.id >= 5;
     
-    if (patternRoll < 0.25) {
+    if (patternRoll < 0.20) {
         // Simple Spike(s)
-        const count = Math.random() > 0.8 ? 3 : (Math.random() > 0.5 ? 2 : 1);
+        const count = getRandom() > 0.8 ? 3 : (getRandom() > 0.5 ? 2 : 1);
         for(let i = 0; i < count; i++) {
             obstaclesRef.current.push({
                 x: startX + (i * 40),
@@ -113,7 +236,7 @@ export const NeonDash: React.FC = () => {
             });
         }
     } 
-    else if (patternRoll < 0.45) {
+    else if (patternRoll < 0.35) {
         // Block on ground (Walkable)
         const width = 60;
         const height = 60;
@@ -128,7 +251,7 @@ export const NeonDash: React.FC = () => {
         });
         
         // Maybe a spike on top?
-        if (Math.random() > 0.6) {
+        if (getRandom() > 0.6) {
             obstaclesRef.current.push({
                 x: startX + 15,
                 y: CANVAS_HEIGHT - FLOOR_HEIGHT - height - 30,
@@ -140,8 +263,29 @@ export const NeonDash: React.FC = () => {
             });
         }
     }
-    else if (patternRoll < 0.6) {
-        // Staircase (2 blocks)
+    else if (patternRoll < 0.45) {
+        // Spike Tower (Rectangle on Triangle)
+        obstaclesRef.current.push({
+            x: startX,
+            y: CANVAS_HEIGHT - FLOOR_HEIGHT - 40,
+            width: 40,
+            height: 40,
+            type: ObstacleType.SPIKE,
+            color: COLORS.SPIKE,
+            passed: false
+        });
+        obstaclesRef.current.push({
+            x: startX,
+            y: CANVAS_HEIGHT - FLOOR_HEIGHT - 80, // 40(spike) + 40(block)
+            width: 40,
+            height: 40,
+            type: ObstacleType.BLOCK,
+            color: COLORS.BLOCK,
+            passed: false
+        });
+    }
+    else if (patternRoll < 0.60) {
+        // Staircase
         obstaclesRef.current.push({
             x: startX,
             y: CANVAS_HEIGHT - FLOOR_HEIGHT - 50,
@@ -155,7 +299,7 @@ export const NeonDash: React.FC = () => {
             x: startX + 50,
             y: CANVAS_HEIGHT - FLOOR_HEIGHT - 100,
             width: 50,
-            height: 100, // Taller block visually
+            height: 100,
             type: ObstacleType.BLOCK,
             color: COLORS.BLOCK,
             passed: false
@@ -163,7 +307,7 @@ export const NeonDash: React.FC = () => {
     }
     else if (patternRoll < 0.75) {
         // Floating Platform
-        const height = 120; // Height from ground
+        const height = 90; 
         obstaclesRef.current.push({
             x: startX,
             y: CANVAS_HEIGHT - FLOOR_HEIGHT - height,
@@ -175,7 +319,7 @@ export const NeonDash: React.FC = () => {
         });
         
         // Spike under it?
-        if (Math.random() > 0.3) {
+        if (getRandom() > 0.3) {
              obstaclesRef.current.push({
                 x: startX + 30,
                 y: CANVAS_HEIGHT - FLOOR_HEIGHT - 40,
@@ -189,9 +333,8 @@ export const NeonDash: React.FC = () => {
     }
     else if (isHighDifficulty && patternRoll < 0.85) {
         // Boosters! (Pad or Orb)
-        if (Math.random() > 0.5) {
+        if (getRandom() > 0.5) {
             // JUMP PAD Pattern
-            // Block -> Pad -> Gap
             obstaclesRef.current.push({
                 x: startX,
                 y: CANVAS_HEIGHT - FLOOR_HEIGHT - 50,
@@ -202,15 +345,14 @@ export const NeonDash: React.FC = () => {
                 passed: false
             });
             obstaclesRef.current.push({
-                x: startX + 10, // Centered on block
-                y: CANVAS_HEIGHT - FLOOR_HEIGHT - 50 - 10, // On top of block
+                x: startX + 10,
+                y: CANVAS_HEIGHT - FLOOR_HEIGHT - 50 - 10,
                 width: 30,
                 height: 10,
                 type: ObstacleType.JUMP_PAD,
                 color: COLORS.JUMP_PAD,
                 passed: false
             });
-            // Add a spike pit after to force usage
             obstaclesRef.current.push({
                 x: startX + 200,
                 y: CANVAS_HEIGHT - FLOOR_HEIGHT - 40,
@@ -222,7 +364,6 @@ export const NeonDash: React.FC = () => {
             });
         } else {
             // JUMP ORB Pattern
-            // Spike pit with Orb in middle
             obstaclesRef.current.push({
                 x: startX,
                 y: CANVAS_HEIGHT - FLOOR_HEIGHT - 40,
@@ -232,7 +373,6 @@ export const NeonDash: React.FC = () => {
                 color: COLORS.SPIKE,
                 passed: false
             });
-            
             obstaclesRef.current.push({
                 x: startX + 100,
                 y: CANVAS_HEIGHT - FLOOR_HEIGHT - 40,
@@ -243,10 +383,9 @@ export const NeonDash: React.FC = () => {
                 passed: false
             });
 
-            // The Orb
             obstaclesRef.current.push({
                 x: startX + 50,
-                y: CANVAS_HEIGHT - FLOOR_HEIGHT - 140, // High in air
+                y: CANVAS_HEIGHT - FLOOR_HEIGHT - 140,
                 width: 50,
                 height: 50,
                 type: ObstacleType.JUMP_ORB,
@@ -259,7 +398,7 @@ export const NeonDash: React.FC = () => {
         // Saw Blade
         obstaclesRef.current.push({
             x: startX,
-            y: CANVAS_HEIGHT - FLOOR_HEIGHT - 70, // Floating slightly
+            y: CANVAS_HEIGHT - FLOOR_HEIGHT - 70,
             width: 70,
             height: 70,
             type: ObstacleType.SAW,
@@ -269,12 +408,12 @@ export const NeonDash: React.FC = () => {
     }
   };
 
-  const createParticles = (x: number, y: number, color: string, count: number = 10) => {
+  const createParticles = (x: number, y: number, color: string, count = 10) => {
     for (let i = 0; i < count; i++) {
       particlesRef.current.push({
         x,
         y,
-        vx: (Math.random() - 0.5) * 12,
+        vx: (Math.random() - 0.5) * 12, // Visuals can stay random
         vy: (Math.random() - 0.5) * 12,
         life: 1.0,
         color: color,
@@ -290,7 +429,6 @@ export const NeonDash: React.FC = () => {
     const player = playerRef.current;
     const level = LEVELS.find(l => l.id === currentLevelId) || LEVELS[0];
 
-    // Record previous Y for collision logic
     player.prevY = player.y;
 
     // 1. Update Distance
@@ -301,6 +439,10 @@ export const NeonDash: React.FC = () => {
     }
 
     if (distanceTraveledRef.current >= LEVEL_LENGTH) {
+        // Save 100% record
+        saveBestScore(currentLevelId, 100);
+        setBestScore(100);
+        playSound('win');
         setGameState(GameState.LEVEL_COMPLETE);
         return;
     }
@@ -312,15 +454,11 @@ export const NeonDash: React.FC = () => {
     // Floor Collision
     const floorY = CANVAS_HEIGHT - FLOOR_HEIGHT - player.height;
     
-    // We only check floor if we are below it. 
-    // Note: We handle block collision separately.
-    
     if (player.y > floorY) {
       player.y = floorY;
       player.dy = 0;
       player.isGrounded = true;
       
-      // Snap rotation
       const rot = player.rotation % (Math.PI / 2);
       if (rot < 0.1 || rot > (Math.PI / 2) - 0.1) {
           player.rotation = Math.round(player.rotation / (Math.PI / 2)) * (Math.PI / 2);
@@ -330,7 +468,6 @@ export const NeonDash: React.FC = () => {
           player.rotation += player.rotationVelocity;
       }
     } else {
-      // Allow rotation if not on floor (will be overridden if on block)
       if (!player.isGrounded) {
           player.rotation += 0.15;
       }
@@ -338,25 +475,25 @@ export const NeonDash: React.FC = () => {
 
     // 3. Obstacles Movement & Spawning
     const lastObstacle = obstaclesRef.current[obstaclesRef.current.length - 1];
-    // Spawn significantly ahead
-    if (!lastObstacle || lastObstacle.x < CANVAS_WIDTH + 600) {
-      spawnObstacle(lastObstacle ? lastObstacle.x : CANVAS_WIDTH, level);
+    
+    // Initial spawn logic: If no obstacles, start spawning further out to give player time to prepare
+    if (!lastObstacle) {
+         spawnObstacle(CANVAS_WIDTH + 400, level); // Safe start zone
+    } else if (lastObstacle.x < CANVAS_WIDTH + 600) {
+         spawnObstacle(lastObstacle.x, level);
     }
 
     obstaclesRef.current.forEach(obs => {
       obs.x -= level.speed;
     });
 
-    // Remove passed
     if (obstaclesRef.current.length > 0 && obstaclesRef.current[0].x + obstaclesRef.current[0].width < -200) {
       obstaclesRef.current.shift();
     }
     
-    // Saw Rotation Animation
     sawRotationRef.current -= 0.15;
 
     // 4. Collision Detection
-    // Player Hitbox (slightly smaller)
     const pRect = {
         l: player.x + 8, 
         r: player.x + player.width - 8,
@@ -367,7 +504,6 @@ export const NeonDash: React.FC = () => {
     let onAnyBlock = false;
 
     for (const obs of obstaclesRef.current) {
-        // Optimization: Skip if far away
         if (obs.x > player.x + 100 || obs.x + obs.width < player.x - 100) continue;
 
         const oRect = {
@@ -377,34 +513,41 @@ export const NeonDash: React.FC = () => {
             b: obs.y + obs.height - 2
         };
 
-        // AABB Collision Check
         const isColliding = (pRect.l < oRect.r && pRect.r > oRect.l && pRect.t < oRect.b && pRect.b > oRect.t);
 
         if (isColliding) {
             if (obs.type === ObstacleType.SPIKE || obs.type === ObstacleType.SAW) {
-                // Instant death
                 createParticles(player.x + player.width/2, player.y + player.height/2, COLORS.PLAYER, 30);
+                playSound('crash');
+                
+                // Handle High Score Logic
+                const finalPct = Math.floor((distanceTraveledRef.current / LEVEL_LENGTH) * 100);
+                const saved = getSavedBestScore(currentLevelId);
+                if (finalPct > saved) {
+                    saveBestScore(currentLevelId, finalPct);
+                    setBestScore(finalPct);
+                }
+                
                 setGameState(GameState.GAME_OVER);
                 return;
             } 
             else if (obs.type === ObstacleType.JUMP_PAD) {
-                // Auto Jump
                 player.dy = level.jumpForce * 1.4;
                 player.isGrounded = false;
-                player.rotationVelocity = 0.2; // Fast spin
+                player.rotationVelocity = 0.2; 
                 createParticles(player.x + player.width/2, player.y + player.height, COLORS.JUMP_PAD, 10);
+                playSound('pad');
             }
             else if (obs.type === ObstacleType.JUMP_ORB) {
-                // Input Jump (Check if Space was pressed THIS FRAME or is held fresh)
                 if (isSpacePressedRef.current && !obs.passed) {
                     player.dy = level.jumpForce;
                     player.isGrounded = false;
-                    obs.passed = true; // Mark as used
+                    obs.passed = true; 
                     createParticles(obs.x + obs.width/2, obs.y + obs.height/2, COLORS.JUMP_ORB, 15);
+                    playSound('orb');
                 }
             }
             else if (obs.type === ObstacleType.BLOCK || obs.type === ObstacleType.PLATFORM) {
-                // Solid collision logic
                 const prevBottom = player.prevY + player.height;
                 const tolerance = Math.max(20, player.dy + 10);
                 const isFalling = player.dy >= 0;
@@ -412,13 +555,11 @@ export const NeonDash: React.FC = () => {
                 const isTopCollision = (player.y + player.height) >= obs.y && (player.y + player.height) <= (obs.y + 25);
 
                 if (isFalling && (wasAbove || isTopCollision)) {
-                    // Landed on top
                     player.y = obs.y - player.height;
                     player.dy = 0;
                     player.isGrounded = true;
                     onAnyBlock = true;
                     
-                    // Snap rotation on block
                     const rot = player.rotation % (Math.PI / 2);
                     if (rot < 0.1 || rot > (Math.PI / 2) - 0.1) {
                         player.rotation = Math.round(player.rotation / (Math.PI / 2)) * (Math.PI / 2);
@@ -426,12 +567,20 @@ export const NeonDash: React.FC = () => {
                         player.rotation += 0.2;
                     }
                 } else {
-                    // Handle collision from side or bottom
                     if (obs.type === ObstacleType.PLATFORM) {
-                        // Pass-through for Platforms!
+                        // Pass-through
                     } else {
-                        // Solid Block -> Crash
                         createParticles(player.x + player.width/2, player.y + player.height/2, COLORS.PLAYER, 30);
+                        playSound('crash');
+                        
+                        // Handle High Score Logic
+                        const finalPct = Math.floor((distanceTraveledRef.current / LEVEL_LENGTH) * 100);
+                        const saved = getSavedBestScore(currentLevelId);
+                        if (finalPct > saved) {
+                            saveBestScore(currentLevelId, finalPct);
+                            setBestScore(finalPct);
+                        }
+
                         setGameState(GameState.GAME_OVER);
                         return;
                     }
@@ -440,19 +589,17 @@ export const NeonDash: React.FC = () => {
         }
     }
 
-    // If we are not on floor and not on any block, we are falling
     if (player.y < floorY && !onAnyBlock) {
         player.isGrounded = false;
     }
 
-    // Jump Input (Normal Ground Jump)
     if (isSpacePressedRef.current && player.isGrounded) {
       player.dy = level.jumpForce;
       player.isGrounded = false;
-      isSpacePressedRef.current = false; // Require repress
+      isSpacePressedRef.current = false; 
+      playSound('jump');
     }
 
-    // 5. Particles
     particlesRef.current.forEach(p => {
       p.x += p.vx;
       p.y += p.vy;
@@ -460,13 +607,10 @@ export const NeonDash: React.FC = () => {
     });
     particlesRef.current = particlesRef.current.filter(p => p.life > 0);
 
-    // 6. Background Parallax
     bgOffsetRef.current = (bgOffsetRef.current + level.speed * 0.15) % CANVAS_WIDTH;
-
-    // Track prev inputs
     wasSpacePressedRef.current = isSpacePressedRef.current;
 
-  }, [gameState, currentLevelId, percentage]);
+  }, [gameState, currentLevelId, percentage, getRandom, playSound]);
 
   // --- Render Loop ---
   const draw = useCallback(() => {
@@ -477,14 +621,12 @@ export const NeonDash: React.FC = () => {
 
     const level = LEVELS.find(l => l.id === currentLevelId) || LEVELS[0];
 
-    // Clear & Background
     const gradient = ctx.createLinearGradient(0, 0, 0, CANVAS_HEIGHT);
     gradient.addColorStop(0, level.colorTop);
     gradient.addColorStop(1, level.colorBottom);
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 
-    // Grid / Tech Lines
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
     ctx.lineWidth = 2;
     const gridSize = 80;
@@ -496,14 +638,12 @@ export const NeonDash: React.FC = () => {
         ctx.lineTo(x, CANVAS_HEIGHT);
         ctx.stroke();
     }
-    // Horizon line
     ctx.beginPath();
     ctx.moveTo(0, CANVAS_HEIGHT/2);
     ctx.lineTo(CANVAS_WIDTH, CANVAS_HEIGHT/2);
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
     ctx.stroke();
 
-    // Floor
     ctx.fillStyle = COLORS.FLOOR;
     ctx.fillRect(0, CANVAS_HEIGHT - FLOOR_HEIGHT, CANVAS_WIDTH, FLOOR_HEIGHT);
     
@@ -514,7 +654,6 @@ export const NeonDash: React.FC = () => {
     ctx.lineTo(CANVAS_WIDTH, CANVAS_HEIGHT - FLOOR_HEIGHT);
     ctx.stroke();
 
-    // Obstacles
     obstaclesRef.current.forEach(obs => {
         ctx.shadowBlur = 0;
         
@@ -530,20 +669,18 @@ export const NeonDash: React.FC = () => {
             ctx.lineWidth = 2;
             ctx.stroke();
         } else if (obs.type === ObstacleType.BLOCK || obs.type === ObstacleType.PLATFORM) {
+            // Check type for color
             const isPlatform = obs.type === ObstacleType.PLATFORM;
             const color = isPlatform ? COLORS.PLATFORM : COLORS.BLOCK;
             const borderColor = isPlatform ? COLORS.PLATFORM_BORDER : COLORS.BLOCK_BORDER;
 
-            // Main fill
             ctx.fillStyle = color;
             ctx.fillRect(obs.x, obs.y, obs.width, obs.height);
             
-            // Outer Border
             ctx.strokeStyle = borderColor;
             ctx.lineWidth = 3;
             ctx.strokeRect(obs.x, obs.y, obs.width, obs.height);
 
-            // Inner Decoration
             ctx.beginPath();
             ctx.lineWidth = 2;
             ctx.strokeStyle = 'rgba(255,255,255,0.3)';
@@ -580,7 +717,6 @@ export const NeonDash: React.FC = () => {
             ctx.lineWidth = 2;
             ctx.stroke();
             
-            // Center hub
             ctx.beginPath();
             ctx.arc(0, 0, 10, 0, Math.PI*2);
             ctx.fillStyle = COLORS.SAW_CENTER;
@@ -589,7 +725,6 @@ export const NeonDash: React.FC = () => {
             ctx.restore();
         } else if (obs.type === ObstacleType.JUMP_PAD) {
             ctx.fillStyle = COLORS.JUMP_PAD;
-            // Draw a flat pad on the ground/block
             ctx.beginPath();
             ctx.moveTo(obs.x, obs.y + obs.height);
             ctx.quadraticCurveTo(obs.x + obs.width/2, obs.y, obs.x + obs.width, obs.y + obs.height);
@@ -598,13 +733,11 @@ export const NeonDash: React.FC = () => {
             ctx.lineWidth = 2;
             ctx.stroke();
             
-            // Rings effect
             ctx.strokeStyle = 'rgba(255,255,0, 0.5)';
             ctx.beginPath();
             ctx.arc(obs.x + obs.width/2, obs.y + obs.height, obs.width/2 - 5, Math.PI, 0);
             ctx.stroke();
         } else if (obs.type === ObstacleType.JUMP_ORB) {
-             // Pulsating effect
              const pulse = Math.sin(Date.now() / 100) * 2;
              const cx = obs.x + obs.width/2;
              const cy = obs.y + obs.height/2;
@@ -615,7 +748,6 @@ export const NeonDash: React.FC = () => {
              ctx.fillStyle = COLORS.JUMP_ORB;
              ctx.fill();
              
-             // Inner Ring
              ctx.beginPath();
              ctx.arc(cx, cy, r * 0.7, 0, Math.PI*2);
              ctx.strokeStyle = COLORS.JUMP_ORB_INNER;
@@ -629,7 +761,6 @@ export const NeonDash: React.FC = () => {
         }
     });
 
-    // Player
     const p = playerRef.current;
     if (!p.isDead && gameState !== GameState.GAME_OVER) {
         ctx.save();
@@ -647,7 +778,6 @@ export const NeonDash: React.FC = () => {
         ctx.restore();
     }
 
-    // Particles
     ctx.shadowBlur = 0;
     particlesRef.current.forEach(part => {
         ctx.globalAlpha = part.life;
@@ -687,13 +817,11 @@ export const NeonDash: React.FC = () => {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Ignore if typing or clicking button via keyboard
-      if ((e.target as HTMLElement).tagName === 'BUTTON') return;
+      if (e.target && (e.target as HTMLElement).tagName === 'BUTTON') return; 
 
       if (e.code === 'Space' || e.code === 'ArrowUp') {
-        e.preventDefault(); // Prevent scrolling
+        e.preventDefault();
         isSpacePressedRef.current = true;
-        
         if (gameState !== GameState.PLAYING && gameState !== GameState.MENU) {
              restartGame();
         }
@@ -705,8 +833,7 @@ export const NeonDash: React.FC = () => {
         }
     };
     const handleTouchStart = (e: TouchEvent) => {
-        // Ignore if touching a button
-        if ((e.target as HTMLElement).closest('button')) return;
+        if (e.target && (e.target as HTMLElement).closest('button')) return;
 
         isSpacePressedRef.current = true;
         if (gameState !== GameState.PLAYING && gameState !== GameState.MENU) {
@@ -731,20 +858,28 @@ export const NeonDash: React.FC = () => {
   const currentLevel = LEVELS.find(l => l.id === currentLevelId) || LEVELS[0];
 
   return (
-    <div className="relative w-full h-full flex justify-center items-center bg-black overflow-hidden">
+    <div className="relative w-full h-full flex justify-center items-center bg-black overflow-hidden h-screen">
       <canvas
         ref={canvasRef}
         width={CANVAS_WIDTH}
         height={CANVAS_HEIGHT}
         className="w-full h-full object-contain max-w-full max-h-full shadow-2xl"
         onMouseDown={(e) => {
-             // Ignore clicks on buttons (though mousedown bubbles, usually buttons handle their own click)
-             // But we track space press via mouse down for PC
              if ((e.target as HTMLElement).closest('button')) return;
              isSpacePressedRef.current = true;
+             initAudio();
         }}
         onMouseUp={() => isSpacePressedRef.current = false}
+        onTouchStart={initAudio}
       />
+
+      {/* Mute Button */}
+      <button 
+        onClick={() => setIsMuted(!isMuted)}
+        className="absolute top-4 right-4 z-50 p-2 bg-slate-800/50 rounded-full hover:bg-slate-700/50 text-white transition-colors cursor-pointer"
+      >
+        {isMuted ? <VolumeX size={24} /> : <Volume2 size={24} />}
+      </button>
 
       {/* HUD */}
       {gameState === GameState.PLAYING && (
@@ -755,8 +890,12 @@ export const NeonDash: React.FC = () => {
                     style={{ width: `${percentage}%` }}
                 />
             </div>
-            <div className="mt-2 font-arcade text-4xl font-bold text-white drop-shadow-lg tracking-widest">
+            <div className="mt-2 font-arcade text-4xl font-bold neon-white tracking-widest">
                 {percentage}%
+            </div>
+            <div className="absolute top-4 left-10 text-white/80 font-arcade flex items-center gap-2">
+                 <Trophy size={16} className="text-yellow-400" /> 
+                 <span>Best: {Math.max(percentage, bestScore)}%</span>
             </div>
             <div className="absolute top-2 right-10 text-white/50 font-arcade">
                 {currentLevel.name}
@@ -767,15 +906,14 @@ export const NeonDash: React.FC = () => {
       {/* MENU */}
       {gameState === GameState.MENU && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 backdrop-blur-sm z-10">
-          <h1 className="text-6xl md:text-8xl font-arcade font-bold text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-600 mb-8 drop-shadow-[0_0_15px_rgba(6,182,212,0.8)]">
+          <h1 className="text-6xl md:text-8xl font-arcade font-bold neon-blue mb-8 animate-flicker">
             NEON DASH
           </h1>
           
-          {/* Level Selector */}
           <div className="w-full max-w-2xl flex items-center justify-between mb-10 px-4">
              <button 
                 onClick={prevLevel}
-                className="p-4 rounded-full bg-white/10 hover:bg-white/20 text-white transition-all active:scale-90"
+                className="p-4 rounded-full bg-white/10 hover:bg-white/20 text-white transition-all active:scale-90 cursor-pointer"
              >
                 <ChevronLeft size={48} />
              </button>
@@ -788,20 +926,23 @@ export const NeonDash: React.FC = () => {
                         background: `linear-gradient(135deg, ${currentLevel.colorTop}, ${currentLevel.colorBottom})`
                     }}
                  >
-                     {/* Mini Level Preview (Abstract) */}
                      <div className="absolute inset-0 opacity-30 bg-[url('https://www.transparenttextures.com/patterns/diagmonds-light.png')]"></div>
                      <span className="font-arcade text-6xl font-bold text-white/20">{currentLevel.id}</span>
                  </div>
                  
-                 <h2 className="text-4xl font-arcade font-bold text-white mb-2 text-center">{currentLevel.name}</h2>
-                 <div className="flex items-center gap-2 text-cyan-300 font-arcade text-xl">
-                    <span>{currentLevel.difficultyStr}</span>
+                 <h2 className="text-4xl font-arcade font-bold neon-blue mb-2 text-center">{currentLevel.name}</h2>
+                 <div className="flex flex-col items-center gap-1 font-arcade text-xl">
+                    <span className="text-cyan-300">{currentLevel.difficultyStr}</span>
+                    <div className="flex items-center gap-2 text-yellow-400 mt-1">
+                        <Trophy size={20} />
+                        <span>BEST: {bestScore}%</span>
+                    </div>
                  </div>
              </div>
 
              <button 
                 onClick={nextLevel}
-                className="p-4 rounded-full bg-white/10 hover:bg-white/20 text-white transition-all active:scale-90"
+                className="p-4 rounded-full bg-white/10 hover:bg-white/20 text-white transition-all active:scale-90 cursor-pointer"
              >
                 <ChevronRight size={48} />
              </button>
@@ -809,7 +950,7 @@ export const NeonDash: React.FC = () => {
 
           <button 
             onClick={startGame}
-            className="group relative px-16 py-6 bg-cyan-600 hover:bg-cyan-500 text-white font-arcade font-bold text-3xl rounded-xl transition-all hover:scale-105 active:scale-95 shadow-[0_0_30px_rgba(8,145,178,0.6)]"
+            className="group relative px-16 py-6 bg-cyan-600 hover:bg-cyan-500 text-white font-arcade font-bold text-3xl rounded-xl transition-all hover:scale-105 active:scale-95 shadow-[0_0_30px_rgba(8,145,178,0.6)] cursor-pointer"
           >
             <span className="flex items-center gap-3">
               <Play fill="currentColor" size={32} /> PLAY
@@ -821,14 +962,19 @@ export const NeonDash: React.FC = () => {
       {/* Game Over */}
       {gameState === GameState.GAME_OVER && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 backdrop-blur-md z-20">
-          <h2 className="text-6xl font-arcade font-bold text-red-500 mb-4 drop-shadow-[0_0_10px_rgba(239,68,68,0.8)]">
+          <h2 className="text-6xl font-arcade font-bold neon-red mb-4">
             CRASHED!
           </h2>
           
           <div className="w-full max-w-md h-4 bg-slate-800 rounded-full overflow-hidden mb-2">
              <div className="h-full bg-red-500" style={{ width: `${percentage}%` }} />
           </div>
-          <span className="text-6xl font-arcade font-bold text-white mb-8">{percentage}%</span>
+          <span className="text-6xl font-arcade font-bold neon-white mb-2">{percentage}%</span>
+          
+          <div className="flex items-center gap-2 text-yellow-400 font-arcade text-xl mb-8">
+                <Trophy size={20} />
+                <span>Personal Best: {bestScore}%</span>
+          </div>
 
           <button 
             onClick={restartGame}
@@ -849,14 +995,14 @@ export const NeonDash: React.FC = () => {
       {gameState === GameState.LEVEL_COMPLETE && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-green-900/95 to-black/95 backdrop-blur-md z-20">
            <CheckCircle className="text-green-400 mb-4 w-24 h-24 drop-shadow-[0_0_20px_rgba(74,222,128,0.6)] animate-bounce" />
-           <h2 className="text-6xl font-arcade font-bold text-white mb-4">
+           <h2 className="text-6xl font-arcade font-bold neon-green mb-4">
             LEVEL COMPLETE!
           </h2>
           <div className="text-4xl font-arcade text-green-400 mb-8">{currentLevel.name}</div>
           
           <button 
             onClick={() => setGameState(GameState.MENU)}
-            className="flex items-center gap-3 px-12 py-6 bg-green-600 text-white font-arcade font-bold text-2xl rounded-xl hover:bg-green-500 transition-all hover:scale-105 active:scale-95 shadow-[0_0_20px_rgba(22,163,74,0.5)]"
+            className="flex items-center gap-3 px-12 py-6 bg-green-600 text-white font-arcade font-bold text-2xl rounded-xl hover:bg-green-500 transition-all hover:scale-105 active:scale-95 shadow-[0_0_20px_rgba(22,163,74,0.5)] cursor-pointer"
           >
              CONTINUE
           </button>
